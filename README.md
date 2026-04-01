@@ -1,101 +1,198 @@
-# WhatsApp LLM Bridge Server
+# WhatsApp LLM Bridge
 
-Connects the Chrome extension → LM Studio + all 4 MCP tools.
+`waBridge` connects WhatsApp Web to a local model running in LM Studio. It pairs a Chrome extension with a small Express server so you can generate suggested replies, optionally call MCP tools, and keep lightweight contact memory on your machine.
 
-## Full Flow
+## Overview
 
-```
+- Local-first reply suggestions for WhatsApp Web
+- LM Studio integration through the OpenAI-compatible chat API
+- Optional MCP tool access for file, web, GitHub, and memory workflows
+- Simple contact memory stored in `contacts.json`
+- Image context caching stored in `image-contexts.json`
+
+## How it works
+
+```text
 WhatsApp Web
-    ↓  keyword matched
-Chrome Extension
-    ↓  POST /suggest
-Bridge Server (port 3000)
-    ↓  spawns on startup
-┌─────────────────────────────────┐
-│  file-reader MCP                │
-│  web-summarizer MCP             │
-│  github-reader MCP              │
-│  memory-mcp MCP                 │
-└─────────────────────────────────┘
-    ↓  tool calls (if needed)
-LM Studio (port 1234)
-    ↓  final text reply
-Chrome Extension shows suggestion panel
+  -> Chrome extension
+  -> POST /suggest
+  -> waBridge server
+  -> LM Studio
+  -> optional MCP tool calls
+  -> suggested reply
+  -> extension panel
 ```
 
-## Setup
+## Repository layout
+
+```text
+.
+|- server.js
+|- mcp-manager.js
+|- memory-store.js
+|- image-context-store.js
+|- contacts.json
+|- image-contexts.json
+\- chromsideEx/
+   |- manifest.json
+   |- background.js
+   |- content.js
+   |- popup.html
+   \- panel.css
+```
+
+## Requirements
+
+- Node.js
+- LM Studio with at least one loaded model
+- Chrome or any Chromium-based browser
+- Optional MCP servers installed in your LM Studio MCP directory
+
+## Quick start
 
 ### 1. Install dependencies
+
 ```bash
 npm install
 ```
 
-### 2. Configure paths
-Copy `.env.example` to `.env` and fill in your values:
+### 2. Create your environment file
+
 ```bash
 copy .env.example .env
 ```
-Edit `.env`:
-- Set `GITHUB_TOKEN` to your GitHub PAT
-- Confirm `NODE_BIN` path matches your Node.js install
-- Confirm `MCP_BASE` points to your LM Studio mcp folder
+
+Then update `.env` with the correct local paths and values:
+
+| Variable | Purpose |
+|---|---|
+| `LM_STUDIO_URL` | LM Studio server URL, usually `http://localhost:1234` |
+| `DEFAULT_MODEL` | Default model id to use for suggestions |
+| `PORT` | Local bridge port, default `3000` |
+| `NODE_BIN` | Full path to `node.exe` |
+| `MCP_BASE` | Base folder containing your MCP servers |
+| `ALLOWED_DIR` | Allowed root directory for `file-reader` |
+| `GITHUB_TOKEN` | Optional token for `github-reader` |
+| `LM_API_KEY` | Optional API key if your LM Studio server requires one |
+| `ENABLE_MCP_TOOLS` | Set to `true` to allow automatic tool use |
 
 ### 3. Start LM Studio
-- Load a model → Local Server tab → Start Server
 
-### 4. Start the bridge
+Load a model in LM Studio and start the local server.
+
+### 4. Start the bridge server
+
 ```bash
 npm start
 ```
 
-You'll see each MCP server start and list its tools:
-```
-[MCPManager] ✓ file-reader ready
-[MCPManager] ✓ web-summarizer ready
-[MCPManager] ✓ github-reader ready
-[MCPManager] ✓ memory-mcp ready
-[MCPManager] Ready. Total tools: 12
+For watch mode during development:
+
+```bash
+npm run dev
 ```
 
-### 5. Check status
-Open http://localhost:3000/status in your browser to verify everything is connected.
+### 5. Load the Chrome extension
 
-## How the LLM uses tools
+1. Open `chrome://extensions`
+2. Turn on Developer Mode
+3. Click Load unpacked
+4. Choose the `chromsideEx` folder
 
-When the extension sends a message, the bridge:
-1. Sends the message + all MCP tools to LM Studio
-2. If LM Studio calls a tool → bridge executes it via the MCP server
-3. Tool result is fed back to LM Studio
-4. This loops up to 5 times (configurable via `MAX_TOOL_ROUNDS`)
-5. Final text reply is returned to the extension
+The extension targets `http://localhost:3000` by default. If you change `PORT`, update `MCP_SERVER` in `chromsideEx/background.js` as well.
 
-**Example**: User asks "can you check my notes on project X?" → LLM calls `search_files` → file-reader searches `AI_Files` → result returned → LLM writes a reply based on the file content.
+### 6. Verify the installation
 
-## API Endpoints
+Open these endpoints in your browser:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | LM Studio + MCP server status |
-| GET | `/status` | Full status with tool list |
-| POST | `/suggest` | Generate reply (called by extension) |
+- `http://localhost:3000/health`
+- `http://localhost:3000/status`
 
-### POST /suggest body
+## MCP integration
+
+On startup, the bridge attempts to launch these MCP servers:
+
+- `file-reader`
+- `web-summarizer`
+- `github-reader`
+- `memory-mcp`
+
+If one server fails, the bridge continues running with the rest of the available tools.
+
+## Reply generation behavior
+
+The `POST /suggest` endpoint accepts message text plus optional chat and image context.
+
+- Text-only requests can use MCP tools when `ENABLE_MCP_TOOLS=true` and the selected model appears capable enough
+- Image requests use a multimodal prompt path instead of the MCP tool loop
+- If the first result looks malformed or schema-like, the bridge retries with a simpler prompt
+- Tool use is capped at `5` rounds in the current implementation
+
+## API reference
+
+### `GET /health`
+
+Returns:
+
+- bridge status
+- LM Studio availability
+- detected model list
+- MCP readiness summary
+
+### `GET /status`
+
+Returns:
+
+- bridge status
+- configured port
+- LM Studio URL
+- available tool names
+- number of saved contacts
+
+### `POST /suggest`
+
+Example request body:
+
 ```json
 {
-  "message": "Can you check my notes?",
+  "message": "Can you check the screenshot?",
   "contactName": "Budi",
   "chatHistory": [],
-  "model": "llama-3.2-3b-instruct",
-  "systemPrompt": "You are a helpful WhatsApp assistant."
+  "model": "local-model",
+  "systemPrompt": "You are a helpful WhatsApp assistant.",
+  "useTools": true,
+  "imageDataUrl": "data:image/png;base64,...",
+  "latestImageKey": "chat-123:last-image",
+  "forceImageRefresh": false
 }
 ```
+
+Field notes:
+
+- `message` is required
+- `chatHistory` should use chat-completions style message objects
+- `useTools` can force-enable or disable MCP tool usage
+- `imageDataUrl` enables image-aware reply generation
+- `latestImageKey` and `forceImageRefresh` control image-summary caching
+
+### Memory endpoints
+
+- `GET /memory`
+- `GET /memory/:name`
+- `PUT /memory/:name`
+- `DELETE /memory/:name`
+- `DELETE /image-context/:name`
+
+Contact memory is intentionally lightweight. The bridge automatically tracks message count and last-seen time, but structured memory updates are manual.
 
 ## Troubleshooting
 
 | Problem | Fix |
-|---------|-----|
-| MCP server fails to start | Check NODE_BIN path. Run `node --version` to verify |
-| Tools not appearing | Check MCP_BASE path — server.js files must exist there |
-| LM Studio offline | Start Local Server in LM Studio first |
-| Tool calls not working | Some models don't support tool use well — try a larger model |
-| Port 3000 in use | Change PORT in .env and update extension's `MCP_SERVER` in background.js |
+|---|---|
+| LM Studio is offline | Start the LM Studio local server and verify `LM_STUDIO_URL` |
+| MCP tools do not appear | Check `MCP_BASE`, `NODE_BIN`, and confirm each MCP server contains `server.js` |
+| `file-reader` cannot access files | Make sure `ALLOWED_DIR` points to a valid readable directory |
+| GitHub tool fails | Set a valid `GITHUB_TOKEN` in `.env` |
+| The extension cannot reach the bridge | Confirm the bridge is running and `MCP_SERVER` in `chromsideEx/background.js` matches your current port |
+| Tool calling is unreliable | Enable `ENABLE_MCP_TOOLS=true` and use a model that supports tool use well |
+| Image requests fail | Reduce the image size or crop the screenshot before sending |
