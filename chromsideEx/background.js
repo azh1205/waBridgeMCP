@@ -47,9 +47,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "GET_SETTINGS") {
-    chrome.storage.sync.get(["keywords", "keywordFilterEnabled", "provider", "model", "systemPrompt", "autoSend", "autoSendDelay"], (data) => {
+    chrome.storage.sync.get(["extensionEnabled", "keywords", "keywordFilterEnabled", "provider", "model", "systemPrompt", "autoSend", "autoSendDelay"], (data) => {
       const provider = data.provider || DEFAULT_PROVIDER;
       sendResponse({
+        extensionEnabled: data.extensionEnabled !== false,
         keywords: data.keywords || ["help", "support", "info", "halo", "hai"],
         keywordFilterEnabled: data.keywordFilterEnabled !== false,
         provider,

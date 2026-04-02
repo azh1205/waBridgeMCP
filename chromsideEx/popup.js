@@ -10,25 +10,53 @@ let providerCatalog = {
 };
 let pendingSettings = null;
 
+function normalizeExtensionEnabled(value) {
+  return value !== false;
+}
+
 function normalizeKeywordFilterEnabled(value) {
   return value !== false;
 }
 
+function syncExtensionEnabledState() {
+  const extensionEnabled = normalizeExtensionEnabled(document.getElementById("extensionEnabled").checked);
+  const hint = document.getElementById("extensionEnabledHint");
+  const controlledIds = ["keywords", "keywordFilterEnabled", "provider", "model", "systemPrompt", "autoSend", "autoSendDelay"];
+
+  for (const id of controlledIds) {
+    const element = document.getElementById(id);
+    if (!element) continue;
+    element.disabled = !extensionEnabled;
+    element.style.opacity = extensionEnabled ? "1" : "0.55";
+  }
+
+  hint.textContent = extensionEnabled
+    ? "On: watch incoming WhatsApp messages and show the assistant panel. Off: pause all extension activity."
+    : "Extension is paused. WhatsApp message watching, suggestions, and the assistant panel are disabled.";
+
+  syncAutoSendDelayState();
+  syncKeywordFilterState();
+}
+
 function syncAutoSendDelayState() {
+  const extensionEnabled = normalizeExtensionEnabled(document.getElementById("extensionEnabled").checked);
   const autoSend = document.getElementById("autoSend");
   const delayInput = document.getElementById("autoSendDelay");
-  delayInput.disabled = !autoSend.checked;
-  delayInput.style.opacity = autoSend.checked ? "1" : "0.55";
+  delayInput.disabled = !extensionEnabled || !autoSend.checked;
+  delayInput.style.opacity = extensionEnabled && autoSend.checked ? "1" : "0.55";
 }
 
 function syncKeywordFilterState() {
+  const extensionEnabled = normalizeExtensionEnabled(document.getElementById("extensionEnabled").checked);
   const enabled = document.getElementById("keywordFilterEnabled").checked;
   const keywordsInput = document.getElementById("keywords");
   const keywordsHint = document.getElementById("keywordsHint");
 
-  keywordsInput.disabled = !enabled;
-  keywordsInput.style.opacity = enabled ? "1" : "0.55";
-  keywordsHint.textContent = enabled
+  keywordsInput.disabled = !extensionEnabled || !enabled;
+  keywordsInput.style.opacity = extensionEnabled && enabled ? "1" : "0.55";
+  keywordsHint.textContent = !extensionEnabled
+    ? "Extension is off, so keyword matching is currently paused."
+    : enabled
     ? "Comma-separated. Reply suggestions trigger when any keyword is detected."
     : "Keyword filter is off, so every new incoming message can trigger a reply suggestion.";
 }
@@ -128,6 +156,7 @@ function applySavedSettings(data) {
   const provider = normalizeProvider(data.provider || providerCatalog.defaultProvider || DEFAULT_PROVIDER);
   pendingSettings = null;
 
+  document.getElementById("extensionEnabled").checked = normalizeExtensionEnabled(data.extensionEnabled);
   document.getElementById("keywords").value = (data.keywords || ["help", "support", "info", "halo", "hai"]).join(", ");
   document.getElementById("keywordFilterEnabled").checked = normalizeKeywordFilterEnabled(data.keywordFilterEnabled);
   document.getElementById("provider").value = provider;
@@ -136,12 +165,13 @@ function applySavedSettings(data) {
   document.getElementById("autoSendDelay").value = data.autoSendDelay || 5;
 
   syncProviderUi(data.model || DEFAULT_MODEL);
+  syncExtensionEnabledState();
   syncAutoSendDelayState();
   syncKeywordFilterState();
 }
 
 function loadSavedSettings() {
-  chrome.storage.sync.get(["keywords", "keywordFilterEnabled", "provider", "model", "systemPrompt", "autoSend", "autoSendDelay"], (data) => {
+  chrome.storage.sync.get(["extensionEnabled", "keywords", "keywordFilterEnabled", "provider", "model", "systemPrompt", "autoSend", "autoSendDelay"], (data) => {
     if (!providerCatalog.providers.length) {
       pendingSettings = data;
       return;
@@ -151,6 +181,7 @@ function loadSavedSettings() {
 }
 
 document.getElementById("save").addEventListener("click", () => {
+  const extensionEnabled = normalizeExtensionEnabled(document.getElementById("extensionEnabled").checked);
   const keywordsRaw = document.getElementById("keywords").value;
   const keywords = keywordsRaw.split(",").map((k) => k.trim()).filter(Boolean);
   const keywordFilterEnabled = document.getElementById("keywordFilterEnabled").checked;
@@ -160,8 +191,17 @@ document.getElementById("save").addEventListener("click", () => {
   const autoSend = document.getElementById("autoSend").checked;
   const autoSendDelay = parseInt(document.getElementById("autoSendDelay").value, 10) || 5;
 
-  chrome.storage.sync.set({ keywords, keywordFilterEnabled, provider, model, systemPrompt, autoSend, autoSendDelay }, () => {
+  chrome.storage.sync.set({ extensionEnabled, keywords, keywordFilterEnabled, provider, model, systemPrompt, autoSend, autoSendDelay }, () => {
     setStatus("Settings saved!", "ok");
+    setTimeout(() => { setStatus(""); }, 2000);
+  });
+});
+
+document.getElementById("extensionEnabled").addEventListener("change", () => {
+  const extensionEnabled = normalizeExtensionEnabled(document.getElementById("extensionEnabled").checked);
+  syncExtensionEnabledState();
+  chrome.storage.sync.set({ extensionEnabled }, () => {
+    setStatus(extensionEnabled ? "Extension enabled." : "Extension disabled.", "ok");
     setTimeout(() => { setStatus(""); }, 2000);
   });
 });

@@ -7,7 +7,7 @@ console.log("[WA-LLM] Content script successfully loaded. Waiting for WhatsApp U
 const MCP_SERVER = "http://localhost:3000";
 const AUTO_IMAGE_SCAN_LIMIT = 4;
 
-let settings = { keywords: [], keywordFilterEnabled: true, provider: "local", model: "local-model", systemPrompt: "", autoSend: false, autoSendDelay: 5 };
+let settings = { extensionEnabled: true, keywords: [], keywordFilterEnabled: true, provider: "local", model: "local-model", systemPrompt: "", autoSend: false, autoSendDelay: 5 };
 let lastProcessedSignature = null;
 let suggestionPanel = null;
 let isProcessing = false;
@@ -22,6 +22,7 @@ let autoSendTimer = null;
 let currentChatHistory = [];
 let lastContactName = "";
 let awaitingIncomingContact = "";
+let chatObserver = null;
 
 // ─── Extension health check ───────────────────────────────────────────────────
 
@@ -52,6 +53,7 @@ async function init() {
 
   try {
     settings = await getSettings();
+    settings.extensionEnabled = normalizeExtensionEnabled(settings.extensionEnabled);
     settings.keywords = normalizeKeywords(settings.keywords);
     settings.keywordFilterEnabled = normalizeKeywordFilterEnabled(settings.keywordFilterEnabled);
     settings.provider = normalizeProvider(settings.provider);
@@ -61,6 +63,7 @@ async function init() {
   } catch (err) {
     console.error("[WA-LLM] Failed to load settings, using defaults.", err);
     settings = {
+      extensionEnabled: true,
       keywords: ["help", "support", "info", "halo", "hai"],
       keywordFilterEnabled: true,
       provider: "local",
@@ -69,13 +72,17 @@ async function init() {
       autoSend: false,
       autoSendDelay: 5,
     };
+    settings.extensionEnabled = normalizeExtensionEnabled(settings.extensionEnabled);
     settings.keywords = normalizeKeywords(settings.keywords);
   }
 
-  injectPanel();
-  observeChat();
-  await syncActiveContactContext(true);
-  console.log("[WA-LLM] Extension active. Listening for keywords:", settings.keywords);
+  syncExtensionRunningState();
+  if (settings.extensionEnabled) {
+    await syncActiveContactContext(true);
+    console.log("[WA-LLM] Extension active. Listening for keywords:", settings.keywords);
+  } else {
+    console.log("[WA-LLM] Extension is disabled. Monitoring is paused.");
+  }
 }
 
 function getSettings() {
@@ -91,6 +98,7 @@ function getSettings() {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "sync") return;
+  if (changes.extensionEnabled) settings.extensionEnabled = normalizeExtensionEnabled(changes.extensionEnabled.newValue);
   if (changes.keywords) settings.keywords = normalizeKeywords(changes.keywords.newValue);
   if (changes.keywordFilterEnabled) settings.keywordFilterEnabled = normalizeKeywordFilterEnabled(changes.keywordFilterEnabled.newValue);
   if (changes.provider) settings.provider = normalizeProvider(changes.provider.newValue);
@@ -98,25 +106,28 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (changes.systemPrompt) settings.systemPrompt = changes.systemPrompt.newValue || "";
   if (changes.autoSend) settings.autoSend = Boolean(changes.autoSend.newValue);
   if (changes.autoSendDelay) settings.autoSendDelay = normalizeAutoSendDelay(changes.autoSendDelay.newValue);
-  if (panelMode === "idle") showPanel("idle");
+  syncExtensionRunningState();
+  if (settings.extensionEnabled && panelMode === "idle") showPanel("idle");
   console.log("[WA-LLM] Settings updated live:", settings);
 });
 
 // ─── DOM Observer ─────────────────────────────────────────────────────────────
 
 function observeChat() {
+  if (chatObserver) return;
   let debounceTimer = null;
   console.log("[WA-LLM] Starting DOM observer for WhatsApp chat updates.");
-  const observer = new MutationObserver(() => {
+  chatObserver = new MutationObserver(() => {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       void checkLatestMessage();
     }, 300);
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+  chatObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 async function checkLatestMessage() {
+  if (!settings.extensionEnabled) return;
   await syncActiveContactContext();
   if (isProcessing) return;
   const latestMessage = getLatestMessageNode();
@@ -193,6 +204,7 @@ function processMessageNode(node) {
 }
 
 async function handleKeywordMatch(messageText) {
+  if (!settings.extensionEnabled) return;
   isProcessing = true;
   showPanel("thinking");
 
@@ -214,6 +226,10 @@ async function handleKeywordMatch(messageText) {
 }
 
 function requestSuggestion(payload) {
+  if (!settings.extensionEnabled) {
+    isProcessing = false;
+    return;
+  }
   console.log("[WA-LLM] Requesting suggestion", {
     contactName: payload.contactName,
     provider: payload.provider,
@@ -227,6 +243,10 @@ function requestSuggestion(payload) {
       payload,
     },
     (response) => {
+      if (!settings.extensionEnabled) {
+        isProcessing = false;
+        return;
+      }
       if (chrome.runtime.lastError) {
         console.error("[WA-LLM] Background message failed:", chrome.runtime.lastError.message);
         showPanel("error", chrome.runtime.lastError.message);
@@ -250,6 +270,7 @@ function requestSuggestion(payload) {
 }
 
 async function analyzeLatestImage() {
+  if (!settings.extensionEnabled) return;
   if (isProcessing) return;
 
   currentContactName = getContactName();
@@ -280,6 +301,7 @@ async function analyzeLatestImage() {
 }
 
 async function clearLatestImageCache() {
+  if (!settings.extensionEnabled) return;
   currentContactName = getContactName();
 
   try {
@@ -547,9 +569,43 @@ function injectPanel() {
   setupPanelDragging();
 }
 
+function removePanel() {
+  clearAutoSendTimer();
+  if (!suggestionPanel) return;
+  suggestionPanel.remove();
+  suggestionPanel = null;
+  panelMode = "idle";
+  previousPanelState = { mode: "idle", content: "" };
+}
+
+function syncExtensionRunningState() {
+  if (settings.extensionEnabled) {
+    const shouldRefreshContext = !chatObserver;
+    injectPanel();
+    observeChat();
+    if (shouldRefreshContext) {
+      lastProcessedSignature = null;
+      void syncActiveContactContext(true);
+    }
+    if (panelMode === "idle" && suggestionPanel) {
+      showPanel("idle");
+    }
+    return;
+  }
+
+  isProcessing = false;
+  clearAutoSendTimer();
+  if (chatObserver) {
+    chatObserver.disconnect();
+    chatObserver = null;
+  }
+  removePanel();
+}
+
 // ─── Panel States ─────────────────────────────────────────────────────────────
 
 function showPanel(state, content = "") {
+  if (!settings.extensionEnabled) return;
   if (!suggestionPanel) injectPanel();
   clearAutoSendTimer();
   if (isMemoryState(state)) rememberPreviousPanel();
@@ -725,6 +781,7 @@ function renderMemoryWrite(memory) {
 // ─── Memory Actions ───────────────────────────────────────────────────────────
 
 async function readMemory() {
+  if (!settings.extensionEnabled) return;
   currentContactName = getContactName();
   await syncActiveContactContext(true);
   console.log("[WA-LLM] Loading contact notes for", currentContactName);
@@ -743,6 +800,7 @@ async function readMemory() {
 }
 
 async function writeMemory() {
+  if (!settings.extensionEnabled) return;
   currentContactName = getContactName();
   await syncActiveContactContext(true);
   console.log("[WA-LLM] Opening memory editor for", currentContactName);
@@ -777,6 +835,7 @@ async function saveMemory() {
 }
 
 async function clearContactMemory() {
+  if (!settings.extensionEnabled) return;
   currentContactName = getContactName();
   if (!window.confirm(`Clear saved prompt context for ${currentContactName}?`)) {
     return;
@@ -800,6 +859,7 @@ async function clearContactMemory() {
 // ─── Suggestion Actions ───────────────────────────────────────────────────────
 
 async function sendSuggestion() {
+  if (!settings.extensionEnabled) return;
   clearAutoSendTimer();
 
   const text = getCurrentSuggestionText();
@@ -823,6 +883,7 @@ async function sendSuggestion() {
 }
 
 function regenerate() {
+  if (!settings.extensionEnabled) return;
   const latestMessage = getLatestMessageNode();
   const msg = latestMessage ? extractMessageText(latestMessage) : "";
   if (msg) handleKeywordMatch(msg);
@@ -849,7 +910,7 @@ function injectTextIntoInput(text) {
 }
 
 function scheduleAutoSend() {
-  if (!settings.autoSend) return;
+  if (!settings.extensionEnabled || !settings.autoSend) return;
 
   const delayMs = normalizeAutoSendDelay(settings.autoSendDelay) * 1000;
   autoSendTimer = window.setTimeout(() => {
@@ -1117,6 +1178,10 @@ function escapeHtml(str) {
 function normalizeKeywords(keywords) {
   return (Array.isArray(keywords) ? keywords : [])
     .map((kw) => String(kw).trim().toLowerCase()).filter(Boolean);
+}
+
+function normalizeExtensionEnabled(value) {
+  return value !== false;
 }
 
 function normalizeKeywordFilterEnabled(value) {

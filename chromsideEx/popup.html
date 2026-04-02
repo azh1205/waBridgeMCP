@@ -91,6 +91,13 @@
         <span id="server-label">Checking...</span>
       </div>
     </div>
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 0 0;">
+      <label style="margin: 0; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; text-transform: none; color: #e2e8f0; font-size: 13px;">
+        <input type="checkbox" id="extensionEnabled" style="width: 16px; height: 16px; margin: 0; cursor: pointer;" />
+        Enable extension
+      </label>
+    </div>
+    <div class="hint" id="extensionEnabledHint" style="margin-top: -6px;">On: watch incoming WhatsApp messages and show the assistant panel. Off: pause all extension activity.</div>
     <div>
       <label>Trigger Keywords</label>
       <input type="text" id="keywords" placeholder="help, support, halo, info" />
