@@ -94,8 +94,15 @@
     <div>
       <label>Trigger Keywords</label>
       <input type="text" id="keywords" placeholder="help, support, halo, info" />
-      <div class="hint">Comma-separated. Reply suggestions trigger when any keyword is detected.</div>
+      <div class="hint" id="keywordsHint">Comma-separated. Reply suggestions trigger when any keyword is detected.</div>
     </div>
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 0 0;">
+      <label style="margin: 0; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; text-transform: none; color: #e2e8f0; font-size: 13px;">
+        <input type="checkbox" id="keywordFilterEnabled" style="width: 16px; height: 16px; margin: 0; cursor: pointer;" />
+        Enable keyword filter
+      </label>
+    </div>
+    <div class="hint" style="margin-top: -6px;">On: only trigger when a configured keyword is detected. Off: trigger for every new incoming message.</div>
     <div>
       <label>Provider</label>
       <select id="provider">

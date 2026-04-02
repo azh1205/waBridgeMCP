@@ -262,7 +262,7 @@ async function generateWithTools({ message, contactName, chatHistory, provider, 
 
     const toolCalls = assistantMsg.tool_calls;
     if (!toolCalls?.length) {
-      return assistantMsg.content?.trim() || "Sorry, I couldn't generate a reply.";
+      return extractReplyText(response) || "Sorry, I couldn't generate a reply.";
     }
 
     for (const call of toolCalls) {
@@ -291,7 +291,7 @@ async function generateWithTools({ message, contactName, chatHistory, provider, 
     messages: [...messages, { role: "user", content: "Give your final WhatsApp reply now." }],
   });
 
-  return fallback.choices?.[0]?.message?.content?.trim() || "Sorry, I couldn't generate a reply.";
+  return extractReplyText(fallback) || "Sorry, I couldn't generate a reply.";
 }
 
 async function generateReply({ message, contactName, chatHistory, provider, model, systemPrompt, useTools, imageDataUrl, imageContextSummary }) {
@@ -364,9 +364,9 @@ async function generatePlainReply({ message, contactName, chatHistory, provider,
     temperature: 0.5,
   });
 
-  const text = response.choices?.[0]?.message?.content?.trim();
+  const text = extractReplyText(response);
   if (!text) {
-    throw new Error(provider === "openrouter" ? "Empty response from OpenRouter" : "Empty response from LM Studio");
+    throw new Error(buildEmptyResponseError(provider, response));
   }
   return text;
 }
@@ -418,7 +418,7 @@ async function generateImageSummary({ contactName, imageDataUrl, provider, model
     temperature: 0.2,
   });
 
-  const summary = response.choices?.[0]?.message?.content?.trim();
+  const summary = extractReplyText(response);
   if (!summary) {
     return "";
   }
@@ -629,6 +629,67 @@ function parseConfiguredModels(value, fallback) {
 
 function dedupeStrings(values) {
   return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function extractReplyText(response) {
+  const choice = response?.choices?.[0];
+  if (!choice) return "";
+
+  const message = choice.message || {};
+  const directContent = normalizeMessageContent(message.content);
+  if (directContent) return directContent;
+
+  const refusal = normalizeMessageContent(message.refusal);
+  if (refusal) return refusal;
+
+  const reasoning = normalizeMessageContent(message.reasoning);
+  if (reasoning) return reasoning;
+
+  const toolCallText = Array.isArray(message.tool_calls)
+    ? message.tool_calls
+      .map((call) => normalizeMessageContent(call?.function?.arguments))
+      .filter(Boolean)
+      .join("\n")
+    : "";
+
+  return toolCallText.trim();
+}
+
+function normalizeMessageContent(content) {
+  if (!content) return "";
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (part?.type === "text") {
+        return part.text || "";
+      }
+      if (typeof part?.content === "string") {
+        return part.content;
+      }
+      return "";
+    })
+    .join("\n")
+    .trim();
+}
+
+function buildEmptyResponseError(provider, response) {
+  const providerName = provider === "openrouter" ? "OpenRouter" : "LM Studio";
+  const choice = response?.choices?.[0];
+  const finishReason = choice?.finish_reason ? ` finish_reason=${choice.finish_reason}.` : "";
+  const message = choice?.message || {};
+  const previewObject = {
+    id: response?.id,
+    model: response?.model,
+    finish_reason: choice?.finish_reason || "",
+    content_type: Array.isArray(message.content) ? "array" : typeof message.content,
+    refusal: normalizeMessageContent(message.refusal).slice(0, 120),
+    reasoning: normalizeMessageContent(message.reasoning).slice(0, 120),
+  };
+
+  return `Empty response from ${providerName}.${finishReason} Preview: ${JSON.stringify(previewObject)}`;
 }
 
 function loadEnvFile() {

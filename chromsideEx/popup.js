@@ -10,11 +10,27 @@ let providerCatalog = {
 };
 let pendingSettings = null;
 
+function normalizeKeywordFilterEnabled(value) {
+  return value !== false;
+}
+
 function syncAutoSendDelayState() {
   const autoSend = document.getElementById("autoSend");
   const delayInput = document.getElementById("autoSendDelay");
   delayInput.disabled = !autoSend.checked;
   delayInput.style.opacity = autoSend.checked ? "1" : "0.55";
+}
+
+function syncKeywordFilterState() {
+  const enabled = document.getElementById("keywordFilterEnabled").checked;
+  const keywordsInput = document.getElementById("keywords");
+  const keywordsHint = document.getElementById("keywordsHint");
+
+  keywordsInput.disabled = !enabled;
+  keywordsInput.style.opacity = enabled ? "1" : "0.55";
+  keywordsHint.textContent = enabled
+    ? "Comma-separated. Reply suggestions trigger when any keyword is detected."
+    : "Keyword filter is off, so every new incoming message can trigger a reply suggestion.";
 }
 
 function setStatus(message, type = "") {
@@ -113,6 +129,7 @@ function applySavedSettings(data) {
   pendingSettings = null;
 
   document.getElementById("keywords").value = (data.keywords || ["help", "support", "info", "halo", "hai"]).join(", ");
+  document.getElementById("keywordFilterEnabled").checked = normalizeKeywordFilterEnabled(data.keywordFilterEnabled);
   document.getElementById("provider").value = provider;
   document.getElementById("systemPrompt").value = data.systemPrompt || DEFAULT_SYSTEM_PROMPT;
   document.getElementById("autoSend").checked = Boolean(data.autoSend);
@@ -120,10 +137,11 @@ function applySavedSettings(data) {
 
   syncProviderUi(data.model || DEFAULT_MODEL);
   syncAutoSendDelayState();
+  syncKeywordFilterState();
 }
 
 function loadSavedSettings() {
-  chrome.storage.sync.get(["keywords", "provider", "model", "systemPrompt", "autoSend", "autoSendDelay"], (data) => {
+  chrome.storage.sync.get(["keywords", "keywordFilterEnabled", "provider", "model", "systemPrompt", "autoSend", "autoSendDelay"], (data) => {
     if (!providerCatalog.providers.length) {
       pendingSettings = data;
       return;
@@ -135,19 +153,21 @@ function loadSavedSettings() {
 document.getElementById("save").addEventListener("click", () => {
   const keywordsRaw = document.getElementById("keywords").value;
   const keywords = keywordsRaw.split(",").map((k) => k.trim()).filter(Boolean);
+  const keywordFilterEnabled = document.getElementById("keywordFilterEnabled").checked;
   const provider = normalizeProvider(document.getElementById("provider").value);
   const model = document.getElementById("model").value.trim();
   const systemPrompt = document.getElementById("systemPrompt").value.trim();
   const autoSend = document.getElementById("autoSend").checked;
   const autoSendDelay = parseInt(document.getElementById("autoSendDelay").value, 10) || 5;
 
-  chrome.storage.sync.set({ keywords, provider, model, systemPrompt, autoSend, autoSendDelay }, () => {
+  chrome.storage.sync.set({ keywords, keywordFilterEnabled, provider, model, systemPrompt, autoSend, autoSendDelay }, () => {
     setStatus("Settings saved!", "ok");
     setTimeout(() => { setStatus(""); }, 2000);
   });
 });
 
 document.getElementById("autoSend").addEventListener("change", syncAutoSendDelayState);
+document.getElementById("keywordFilterEnabled").addEventListener("change", syncKeywordFilterState);
 document.getElementById("provider").addEventListener("change", () => {
   const selectedProvider = normalizeProvider(document.getElementById("provider").value);
   syncProviderUi(chooseModelForProvider(selectedProvider));

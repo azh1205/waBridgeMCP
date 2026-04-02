@@ -7,7 +7,7 @@ console.log("[WA-LLM] Content script successfully loaded. Waiting for WhatsApp U
 const MCP_SERVER = "http://localhost:3000";
 const AUTO_IMAGE_SCAN_LIMIT = 4;
 
-let settings = { keywords: [], provider: "local", model: "local-model", systemPrompt: "", autoSend: false, autoSendDelay: 5 };
+let settings = { keywords: [], keywordFilterEnabled: true, provider: "local", model: "local-model", systemPrompt: "", autoSend: false, autoSendDelay: 5 };
 let lastProcessedSignature = null;
 let suggestionPanel = null;
 let isProcessing = false;
@@ -53,6 +53,7 @@ async function init() {
   try {
     settings = await getSettings();
     settings.keywords = normalizeKeywords(settings.keywords);
+    settings.keywordFilterEnabled = normalizeKeywordFilterEnabled(settings.keywordFilterEnabled);
     settings.provider = normalizeProvider(settings.provider);
     settings.autoSend = Boolean(settings.autoSend);
     settings.autoSendDelay = normalizeAutoSendDelay(settings.autoSendDelay);
@@ -61,6 +62,7 @@ async function init() {
     console.error("[WA-LLM] Failed to load settings, using defaults.", err);
     settings = {
       keywords: ["help", "support", "info", "halo", "hai"],
+      keywordFilterEnabled: true,
       provider: "local",
       model: "local-model",
       systemPrompt: "",
@@ -90,11 +92,13 @@ function getSettings() {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "sync") return;
   if (changes.keywords) settings.keywords = normalizeKeywords(changes.keywords.newValue);
+  if (changes.keywordFilterEnabled) settings.keywordFilterEnabled = normalizeKeywordFilterEnabled(changes.keywordFilterEnabled.newValue);
   if (changes.provider) settings.provider = normalizeProvider(changes.provider.newValue);
   if (changes.model) settings.model = changes.model.newValue || "local-model";
   if (changes.systemPrompt) settings.systemPrompt = changes.systemPrompt.newValue || "";
   if (changes.autoSend) settings.autoSend = Boolean(changes.autoSend.newValue);
   if (changes.autoSendDelay) settings.autoSendDelay = normalizeAutoSendDelay(changes.autoSendDelay.newValue);
+  if (panelMode === "idle") showPanel("idle");
   console.log("[WA-LLM] Settings updated live:", settings);
 });
 
@@ -172,7 +176,7 @@ function processMessageNode(node) {
     return;
   }
 
-  const matched = settings.keywords.some((kw) =>
+  const matched = !settings.keywordFilterEnabled || settings.keywords.some((kw) =>
     messageText.toLowerCase().includes(kw)
   );
 
@@ -181,7 +185,9 @@ function processMessageNode(node) {
     return;
   }
 
-  console.log(`[WA-LLM] Keyword matched! Triggering LLM...`);
+  console.log(settings.keywordFilterEnabled
+    ? `[WA-LLM] Keyword matched! Triggering LLM...`
+    : `[WA-LLM] Keyword filter disabled. Triggering LLM for incoming message...`);
   lastProcessedSignature = signature;
   handleKeywordMatch(messageText);
 }
@@ -461,7 +467,7 @@ function injectPanel() {
       </div>
     </div>
     <div class="wa-llm-body" id="wa-llm-body">
-      <div class="wa-llm-idle">Waiting for keyword match...</div>
+      <div class="wa-llm-idle">${getIdlePanelMessage()}</div>
     </div>
     <div class="wa-llm-footer" id="wa-llm-footer" style="display:none">
       <button class="wa-btn wa-btn-secondary" id="wa-llm-regen">↺ Regen</button>
@@ -560,7 +566,7 @@ function showPanel(state, content = "") {
   memFooter.style.display = "none";
 
   if (state === "idle") {
-    body.innerHTML = `<div class="wa-llm-idle">Waiting for keyword match...</div>`;
+    body.innerHTML = `<div class="wa-llm-idle">${getIdlePanelMessage()}</div>`;
   } else if (state === "thinking") {
     body.innerHTML = `<div class="wa-llm-thinking"><span class="wa-dot"></span><span class="wa-dot"></span><span class="wa-dot"></span><span style="margin-left:8px">${escapeHtml(content || "Generating reply...")}</span></div>`;
   } else if (state === "suggestion") {
@@ -1113,8 +1119,18 @@ function normalizeKeywords(keywords) {
     .map((kw) => String(kw).trim().toLowerCase()).filter(Boolean);
 }
 
+function normalizeKeywordFilterEnabled(value) {
+  return value !== false;
+}
+
 function normalizeProvider(provider) {
   return provider === "openrouter" ? "openrouter" : "local";
+}
+
+function getIdlePanelMessage() {
+  return settings.keywordFilterEnabled
+    ? "Waiting for keyword match..."
+    : "Keyword filter is off. Waiting for the next incoming message...";
 }
 
 function shouldAttachImageContext(messageText) {
